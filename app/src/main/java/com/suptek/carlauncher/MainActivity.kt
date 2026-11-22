@@ -3,6 +3,7 @@ package com.suptek.carlauncher
 import android.Manifest
 import android.annotation.SuppressLint
 import android.app.Activity
+import android.app.AlertDialog
 import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -158,6 +159,47 @@ class MainActivity : Activity() {
         js("onMedia($o)")
     }
 
+    private fun startSaved(s: String): Boolean = try {
+        val i = if (s.contains("/")) Intent().setClassName(s.substringBefore("/"), s.substringAfter("/")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        else packageManager.getLaunchIntentForPackage(s)!!
+        startActivity(i); true
+    } catch (e: Exception) { false }
+
+    private fun findBt(): String? {
+        val pm = packageManager
+        val keys = listOf("bluetooth", "блютуз", "btphone", "btcall", "bt_", "bluesoleil", "handsfree")
+        return pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+            .map { it.activityInfo.packageName to it.loadLabel(pm).toString() }
+            .firstOrNull { (p, n) -> p != packageName && !p.startsWith("com.android.settings") && keys.any { k -> (p + " " + n).lowercase().contains(k) } }?.first
+    }
+
+    private fun openBt() {
+        val s = getSharedPreferences("l", MODE_PRIVATE).getString("bt", null) ?: findBt()
+        if (s == null || !startSaved(s)) showBtPicker()
+    }
+
+    private fun showBtPicker() = runOnUiThread {
+        val pm = packageManager
+        val l = pm.queryIntentActivities(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER), 0)
+            .filter { it.activityInfo.packageName != packageName }.sortedBy { it.loadLabel(pm).toString().lowercase() }
+        AlertDialog.Builder(this).setTitle("Что открывать по кнопке Bluetooth?")
+            .setItems(l.map { it.loadLabel(pm).toString() + "  (" + it.activityInfo.packageName + ")" }.toTypedArray()) { _, i ->
+                pickAct(l[i].activityInfo.packageName)
+            }.show()
+    }
+
+    private fun pickAct(pkg: String) {
+        val acts: List<android.content.pm.ActivityInfo> = try {
+            packageManager.getPackageInfo(pkg, PackageManager.GET_ACTIVITIES).activities?.filter { it.exported && it.enabled } ?: listOf()
+        } catch (e: Exception) { listOf() }
+        val names = listOf("Главный экран приложения") + acts.map { it.name.substringAfterLast('.') }
+        AlertDialog.Builder(this).setTitle("Какой экран открывать?")
+            .setItems(names.toTypedArray()) { _, i ->
+                getSharedPreferences("l", MODE_PRIVATE).edit().putString("bt", if (i == 0) pkg else pkg + "/" + acts[i - 1].name).apply()
+                openBt()
+            }.show()
+    }
+
     inner class Bridge {
         @JavascriptInterface
         fun apps(): String {
@@ -178,6 +220,7 @@ class MainActivity : Activity() {
 
         @JavascriptInterface
         fun open(s: String) = runOnUiThread {
+            if (s == "b:bt") { openBt(); return@runOnUiThread }
             try {
                 if (s.startsWith("p:")) startActivity(packageManager.getLaunchIntentForPackage(s.substring(2))!!)
                 else startActivity(Intent(s.substring(2)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
@@ -185,6 +228,9 @@ class MainActivity : Activity() {
                 Toast.makeText(this@MainActivity, "Не удалось открыть — приложение не установлено", Toast.LENGTH_SHORT).show()
             }
         }
+
+        @JavascriptInterface
+        fun pickBt() = showBtPicker()
 
         @JavascriptInterface
         fun ctl(c: String) {
